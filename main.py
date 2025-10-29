@@ -28,7 +28,6 @@ class MyBot(commands.Bot):
 
 bot = MyBot()
 
-# Запуск бота
 if __name__ == "__main__":
     load_dotenv()  # <— читаем .env
     token = os.getenv("DISCORD_TOKEN")
