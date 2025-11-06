@@ -291,7 +291,7 @@ class Shutdown(commands.Cog):
     @load.error
     @unload.error
     @cogs_list.error
-    @bot_status.error
+    @bots_status.error
     async def owner_only_error(self, ctx, error):
         """Обработчик ошибок для команд только для владельца"""
         if isinstance(error, commands.NotOwner):
