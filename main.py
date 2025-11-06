@@ -32,6 +32,7 @@ bot = MyBot()
 if __name__ == "__main__":
     load_dotenv()  # <— читаем .env
     token = os.getenv("DISCORD_TOKEN")
+    bot.owner_id = os.getenv('OWNER_ID')
 
     if not token or not isinstance(token, str) or token.strip() == "":
         raise RuntimeError(
