@@ -241,7 +241,7 @@ class Shutdown(commands.Cog):
 
     @commands.command()
     @commands.is_owner()
-    async def bot_status(self, ctx):
+    async def bots_status(self, ctx):
         """Показать статус бота (только для владельца)"""
         # Статистика бота
         guilds_count = len(self.bot.guilds)
