@@ -27,6 +27,10 @@ class HelpInfo(commands.Cog):
             is_admin = ctx.author.guild_permissions.administrator
 
         if not is_admin:
+            em = discord.Embed(
+                title="**📘 Stream commands**",
+                color=discord.Color.blurple()
+            )
             em.add_field(
                 name="Streaming tools:",
                 value=(
