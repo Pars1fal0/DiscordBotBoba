@@ -9,13 +9,44 @@ class HelpInfo(commands.Cog):
     @commands.command()
     async def help(self, ctx):
         em = discord.Embed(
-            title="**📘 Available Commands**",
+            title="**📘 Команды для пользователей**",
+            description="Доступные команды, которые не требуют прав администратора.",
             color=discord.Color.blurple()
         )
-        em.add_field(name="No categories:", value=f"`!help` - show available commands\n"
-                                                  f"`!sinfo` - show information about the server\n"
-                                                  f"`!uinfo` - show information about the user\n")
+
+        general_commands = [
+            "`!help` — показать этот список",
+            "`!sinfo` — информация о сервере",
+            "`!uinfo` — информация о себе"
+        ]
+
+        em.add_field(
+            name="Основные команды:",
+            value="\n".join(general_commands),
+            inline=False
+        )
+
+        is_admin = False
+        if ctx.guild and isinstance(ctx.author, discord.Member):
+            is_admin = ctx.author.guild_permissions.administrator
+
+        if not is_admin:
+            stream_commands = [
+                "`!stream` — список стрим-команд",
+                "`!stream linktwitch <логин>` — привязать Twitch",
+                "`!stream linkyoutube <channel_id>` — привязать YouTube",
+                "`!stream show [участник]` — посмотреть привязанные аккаунты",
+                "`!stream unlink <twitch|youtube>` — отвязать платформу"
+            ]
+
+            em.add_field(
+                name="Стрим-инструменты:",
+                value="\n".join(stream_commands),
+                inline=False
+            )
 
         await ctx.send(embed=em)
+
+
 async def setup(bot):
     await bot.add_cog(HelpInfo(bot))
