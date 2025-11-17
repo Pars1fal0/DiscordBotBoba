@@ -1,6 +1,5 @@
 import discord
 from discord.ext import commands
-from discord import app_commands
 import asyncio
 import random
 from typing import List, Dict, Optional
@@ -13,70 +12,83 @@ class TournamentCog(commands.Cog):
         self.active_tournaments = {}
         self.tournament_matches = {}
 
-    @app_commands.command(name="create_tournament", description="Создать новый турнир")
-    @app_commands.describe(
-        name="Название турнира",
-        max_participants="Максимальное количество участников",
-        description="Описание турнира"
-    )
-    async def create_tournament(self, interaction: discord.Interaction, name: str, max_participants: int,
-                                description: str = ""):
-        """Создание нового турнира"""
-        if name in self.active_tournaments:
-            await interaction.response.send_message("❌ Турнир с таким названием уже существует!", ephemeral=True)
+    @commands.command(name="create_tournament", aliases=["ct", "турнир"])
+    async def create_tournament(self, ctx, max_participants: int, *, tournament_info: str = ""):
+        """Создать новый турнир
+        Использование: !create_tournament [макс_участников] [название] (описание)
+        Пример: !create_tournament 8 Кубок чемпионов Ежегодный турнир по игре
+        """
+        try:
+            # Разделяем название и описание
+            parts = tournament_info.split(" ", 1)
+            name = parts[0] if parts else "Без названия"
+            description = parts[1] if len(parts) > 1 else ""
+
+            if name in self.active_tournaments:
+                await ctx.send("❌ Турнир с таким названием уже существует!")
+                return
+
+            if max_participants < 2:
+                await ctx.send("❌ Минимальное количество участников - 2!")
+                return
+
+            tournament = {
+                "name": name,
+                "description": description,
+                "max_participants": max_participants,
+                "participants": [],
+                "status": "registration",
+                "creator": ctx.author.id,
+                "current_round": 0,
+                "channel_id": ctx.channel.id
+            }
+
+            self.active_tournaments[name] = tournament
+            self.tournament_matches[name] = {}
+
+            embed = discord.Embed(
+                title=f"🎯 Турнир: {name}",
+                description=description,
+                color=discord.Color.green()
+            )
+            embed.add_field(name="Макс. участников", value=max_participants, inline=True)
+            embed.add_field(name="Статус", value="Регистрация открыта", inline=True)
+            embed.add_field(name="Участников", value="0", inline=True)
+            embed.add_field(name="Создатель", value=ctx.author.display_name, inline=True)
+            embed.set_footer(text="Используйте !join чтобы присоединиться")
+
+            await ctx.send(embed=embed)
+
+        except ValueError:
+            await ctx.send(
+                "❌ Неверный формат команды. Использование: `!create_tournament [число] [название] (описание)`")
+
+    @commands.command(name="join_tournament", aliases=["join", "участник"])
+    async def join_tournament(self, ctx, *, tournament_name: str):
+        """Присоединиться к турниру
+        Использование: !join [название турнира]
+        """
+        if tournament_name not in self.active_tournaments:
+            await ctx.send("❌ Турнир не найден! Используйте `!tournaments` чтобы посмотреть список турниров.")
             return
 
-        tournament = {
-            "name": name,
-            "description": description,
-            "max_participants": max_participants,
-            "participants": [],
-            "status": "registration",  # registration, active, finished
-            "creator": interaction.user.id,
-            "current_round": 0,
-            "channel_id": interaction.channel_id
-        }
-
-        self.active_tournaments[name] = tournament
-        self.tournament_matches[name] = {}
-
-        embed = discord.Embed(
-            title=f"🎯 Турнир: {name}",
-            description=description,
-            color=discord.Color.green()
-        )
-        embed.add_field(name="Макс. участников", value=max_participants, inline=True)
-        embed.add_field(name="Статус", value="Регистрация открыта", inline=True)
-        embed.add_field(name="Участников", value="0", inline=True)
-        embed.set_footer(text="Используйте /join_tournament чтобы присоединиться")
-
-        await interaction.response.send_message(embed=embed)
-
-    @app_commands.command(name="join_tournament", description="Присоединиться к турниру")
-    @app_commands.describe(name="Название турнира")
-    async def join_tournament(self, interaction: discord.Interaction, name: str):
-        """Присоединение к турниру"""
-        if name not in self.active_tournaments:
-            await interaction.response.send_message("❌ Турнир не найден!", ephemeral=True)
-            return
-
-        tournament = self.active_tournaments[name]
+        tournament = self.active_tournaments[tournament_name]
 
         if tournament["status"] != "registration":
-            await interaction.response.send_message("❌ Регистрация на турнир закрыта!", ephemeral=True)
+            await ctx.send("❌ Регистрация на турнир закрыта!")
             return
 
-        if interaction.user.id in [p["id"] for p in tournament["participants"]]:
-            await interaction.response.send_message("❌ Вы уже зарегистрированы в этом турнире!", ephemeral=True)
+        if ctx.author.id in [p["id"] for p in tournament["participants"]]:
+            await ctx.send("❌ Вы уже зарегистрированы в этом турнире!")
             return
 
         if len(tournament["participants"]) >= tournament["max_participants"]:
-            await interaction.response.send_message("❌ Турнир уже заполнен!", ephemeral=True)
+            await ctx.send("❌ Турнир уже заполнен!")
             return
 
         participant = {
-            "id": interaction.user.id,
-            "name": interaction.user.display_name,
+            "id": ctx.author.id,
+            "name": ctx.author.display_name,
             "wins": 0,
             "losses": 0
         }
@@ -85,35 +97,36 @@ class TournamentCog(commands.Cog):
 
         embed = discord.Embed(
             title="✅ Успешная регистрация",
-            description=f"**{interaction.user.display_name}** присоединился к турниру **{name}**",
+            description=f"**{ctx.author.display_name}** присоединился к турниру **{tournament_name}**",
             color=discord.Color.blue()
         )
         embed.add_field(name="Участников", value=f"{len(tournament['participants'])}/{tournament['max_participants']}",
                         inline=True)
 
-        await interaction.response.send_message(embed=embed)
+        await ctx.send(embed=embed)
 
-    @app_commands.command(name="start_tournament", description="Начать турнир")
-    @app_commands.describe(name="Название турнира")
-    async def start_tournament(self, interaction: discord.Interaction, name: str):
-        """Запуск турнира и создание сетки"""
-        if name not in self.active_tournaments:
-            await interaction.response.send_message("❌ Турнир не найден!", ephemeral=True)
+    @commands.command(name="start_tournament", aliases=["start", "начать"])
+    async def start_tournament(self, ctx, *, tournament_name: str):
+        """Начать турнир
+        Использование: !start [название турнира]
+        """
+        if tournament_name not in self.active_tournaments:
+            await ctx.send("❌ Турнир не найден!")
             return
 
-        tournament = self.active_tournaments[name]
+        tournament = self.active_tournaments[tournament_name]
 
-        if tournament["creator"] != interaction.user.id:
-            await interaction.response.send_message("❌ Только создатель турнира может его запустить!", ephemeral=True)
+        if tournament["creator"] != ctx.author.id:
+            await ctx.send("❌ Только создатель турнира может его запустить!")
             return
 
         if tournament["status"] != "registration":
-            await interaction.response.send_message("❌ Турнир уже запущен или завершен!", ephemeral=True)
+            await ctx.send("❌ Турнир уже запущен или завершен!")
             return
 
         participants_count = len(tournament["participants"])
         if participants_count < 2:
-            await interaction.response.send_message("❌ Недостаточно участников для начала турнира!", ephemeral=True)
+            await ctx.send("❌ Недостаточно участников для начала турнира!")
             return
 
         # Перемешиваем участников
@@ -123,18 +136,18 @@ class TournamentCog(commands.Cog):
 
         # Создаем турнирную сетку
         bracket = self.generate_bracket(tournament["participants"])
-        self.tournament_matches[name] = bracket
+        self.tournament_matches[tournament_name] = bracket
 
         embed = discord.Embed(
-            title=f"🎯 Турнир {name} начался!",
+            title=f"🎯 Турнир {tournament_name} начался!",
             description="Турнирная сетка создана",
             color=discord.Color.gold()
         )
         embed.add_field(name="Участников", value=participants_count, inline=True)
         embed.add_field(name="Текущий раунд", value="1", inline=True)
 
-        await interaction.response.send_message(embed=embed)
-        await self.send_bracket(interaction, name)
+        await ctx.send(embed=embed)
+        await self.send_bracket(ctx, tournament_name)
 
     def generate_bracket(self, participants: List[Dict]) -> Dict:
         """Генерация турнирной сетки"""
@@ -174,8 +187,8 @@ class TournamentCog(commands.Cog):
                 if i + 1 < len(current_matches):
                     match = {
                         "round": round_num,
-                        "player1": None,  # Победитель из предыдущего раунда
-                        "player2": None,  # Победитель из предыдущего раунда
+                        "player1": None,
+                        "player2": None,
                         "winner": None,
                         "completed": False
                     }
@@ -194,7 +207,7 @@ class TournamentCog(commands.Cog):
 
         return bracket
 
-    async def send_bracket(self, interaction: discord.Interaction, tournament_name: str):
+    async def send_bracket(self, ctx, tournament_name: str):
         """Отправка турнирной сетки"""
         bracket = self.tournament_matches[tournament_name]
 
@@ -222,57 +235,53 @@ class TournamentCog(commands.Cog):
                 inline=False
             )
 
-        await interaction.followup.send(embed=embed)
+        await ctx.send(embed=embed)
 
-    @app_commands.command(name="report_score", description="Сообщить результат матча")
-    @app_commands.describe(
-        tournament_name="Название турнира",
-        round_number="Номер раунда",
-        match_number="Номер матча",
-        winner_number="Победитель (1 или 2)"
-    )
-    async def report_score(self, interaction: discord.Interaction, tournament_name: str, round_number: int,
-                           match_number: int, winner_number: int):
-        """Отчет о результате матча"""
+    @commands.command(name="report_score", aliases=["report", "результат"])
+    async def report_score(self, ctx, tournament_name: str, round_number: int, match_number: int, winner_number: int):
+        """Сообщить результат матча
+        Использование: !report [турнир] [раунд] [матч] [победитель]
+        Пример: !report Кубок 1 1 2
+        """
         if tournament_name not in self.active_tournaments:
-            await interaction.response.send_message("❌ Турнир не найден!", ephemeral=True)
+            await ctx.send("❌ Турнир не найден!")
             return
 
         tournament = self.active_tournaments[tournament_name]
         bracket = self.tournament_matches[tournament_name]
 
         if round_number not in bracket or match_number - 1 >= len(bracket[round_number]):
-            await interaction.response.send_message("❌ Матч не найден!", ephemeral=True)
+            await ctx.send("❌ Матч не найден!")
             return
 
         match = bracket[round_number][match_number - 1]
 
         # Проверяем, является ли пользователь участником матча
-        user_id = interaction.user.id
+        user_id = ctx.author.id
         is_player1 = match["player1"] and match["player1"]["id"] == user_id
         is_player2 = match["player2"] and match["player2"]["id"] == user_id
 
         if not (is_player1 or is_player2) and tournament["creator"] != user_id:
-            await interaction.response.send_message("❌ Вы не можете сообщать результат этого матча!", ephemeral=True)
+            await ctx.send("❌ Вы не можете сообщать результат этого матча!")
             return
 
         if match["completed"]:
-            await interaction.response.send_message("❌ Результат этого матча уже зафиксирован!", ephemeral=True)
+            await ctx.send("❌ Результат этого матча уже зафиксирован!")
             return
 
         if winner_number not in [1, 2]:
-            await interaction.response.send_message("❌ Номер победителя должен быть 1 или 2!", ephemeral=True)
+            await ctx.send("❌ Номер победителя должен быть 1 или 2!")
             return
 
         # Определяем победителя
         if winner_number == 1:
             if not match["player1"]:
-                await interaction.response.send_message("❌ В этом матче нет первого игрока!", ephemeral=True)
+                await ctx.send("❌ В этом матче нет первого игрока!")
                 return
             match["winner"] = match["player1"]
         else:
             if not match["player2"]:
-                await interaction.response.send_message("❌ В этом матче нет второго игрока!", ephemeral=True)
+                await ctx.send("❌ В этом матче нет второго игрока!")
                 return
             match["winner"] = match["player2"]
 
@@ -297,8 +306,8 @@ class TournamentCog(commands.Cog):
             color=discord.Color.green()
         )
 
-        await interaction.response.send_message(embed=embed)
-        await self.send_bracket(interaction, tournament_name)
+        await ctx.send(embed=embed)
+        await self.send_bracket(ctx, tournament_name)
 
     async def update_next_round(self, tournament_name: str, current_round: int, match_number: int, winner: Dict):
         """Обновление следующего раунда турнира"""
@@ -322,18 +331,19 @@ class TournamentCog(commands.Cog):
         else:
             next_match["player2"] = winner
 
-    @app_commands.command(name="tournament_info", description="Информация о турнире")
-    @app_commands.describe(name="Название турнира")
-    async def tournament_info(self, interaction: discord.Interaction, name: str):
-        """Информация о турнире"""
-        if name not in self.active_tournaments:
-            await interaction.response.send_message("❌ Турнир не найден!", ephemeral=True)
+    @commands.command(name="tournament_info", aliases=["info", "турнир_инфо"])
+    async def tournament_info(self, ctx, *, tournament_name: str):
+        """Информация о турнире
+        Использование: !info [название турнира]
+        """
+        if tournament_name not in self.active_tournaments:
+            await ctx.send("❌ Турнир не найден!")
             return
 
-        tournament = self.active_tournaments[name]
+        tournament = self.active_tournaments[tournament_name]
 
         embed = discord.Embed(
-            title=f"🎯 Турнир: {name}",
+            title=f"🎯 Турнир: {tournament_name}",
             description=tournament["description"],
             color=discord.Color.blue()
         )
@@ -351,36 +361,38 @@ class TournamentCog(commands.Cog):
 
         # Список участников
         participants_text = "\n".join(
-            [f"• {p['name']} ({p['wins']}-{p['losses']})" for p in tournament["participants"]])
-        embed.add_field(name="Участники", value=participants_text[:1024], inline=False)
+            [f"• {p['name']} (побед: {p['wins']}, поражений: {p['losses']})" for p in tournament["participants"]])
+        if participants_text:
+            embed.add_field(name="Участники", value=participants_text[:1024], inline=False)
 
-        await interaction.response.send_message(embed=embed)
+        await ctx.send(embed=embed)
 
-    @app_commands.command(name="end_tournament", description="Завершить турнир")
-    @app_commands.describe(name="Название турнира")
-    async def end_tournament(self, interaction: discord.Interaction, name: str):
-        """Завершение турнира"""
-        if name not in self.active_tournaments:
-            await interaction.response.send_message("❌ Турнир не найден!", ephemeral=True)
+    @commands.command(name="end_tournament", aliases=["end", "завершить"])
+    async def end_tournament(self, ctx, *, tournament_name: str):
+        """Завершить турнир
+        Использование: !end [название турнира]
+        """
+        if tournament_name not in self.active_tournaments:
+            await ctx.send("❌ Турнир не найден!")
             return
 
-        tournament = self.active_tournaments[name]
+        tournament = self.active_tournaments[tournament_name]
 
-        if tournament["creator"] != interaction.user.id:
-            await interaction.response.send_message("❌ Только создатель турнира может его завершить!", ephemeral=True)
+        if tournament["creator"] != ctx.author.id:
+            await ctx.send("❌ Только создатель турнира может его завершить!")
             return
 
         tournament["status"] = "finished"
 
         # Определяем победителя
-        bracket = self.tournament_matches[name]
-        final_round = max(bracket.keys())
-        final_match = bracket[final_round][0] if bracket[final_round] else None
+        bracket = self.tournament_matches[tournament_name]
+        final_round = max(bracket.keys()) if bracket else 0
+        final_match = bracket[final_round][0] if final_round > 0 and bracket.get(final_round) else None
 
-        winner = final_match["winner"] if final_match and final_match["completed"] else None
+        winner = final_match["winner"] if final_match and final_match.get("completed") else None
 
         embed = discord.Embed(
-            title=f"🏁 Турнир {name} завершен!",
+            title=f"🏁 Турнир {tournament_name} завершен!",
             color=discord.Color.gold()
         )
 
@@ -390,7 +402,75 @@ class TournamentCog(commands.Cog):
         else:
             embed.add_field(name="Победитель", value="Не определен", inline=False)
 
-        await interaction.response.send_message(embed=embed)
+        await ctx.send(embed=embed)
+
+    @commands.command(name="list_tournaments", aliases=["tournaments", "список"])
+    async def list_tournaments(self, ctx):
+        """Список активных турниров
+        Использование: !tournaments
+        """
+        if not self.active_tournaments:
+            await ctx.send("❌ Нет активных турниров!")
+            return
+
+        embed = discord.Embed(
+            title="📋 Активные турниры",
+            color=discord.Color.blue()
+        )
+
+        for name, tournament in self.active_tournaments.items():
+            status_text = {
+                "registration": "Регистрация",
+                "active": "Активен",
+                "finished": "Завершен"
+            }[tournament["status"]]
+
+            embed.add_field(
+                name=name,
+                value=f"Статус: {status_text}\nУчастников: {len(tournament['participants'])}/{tournament['max_participants']}",
+                inline=True
+            )
+
+        await ctx.send(embed=embed)
+
+    @commands.command(name="leave_tournament", aliases=["leave", "выйти"])
+    async def leave_tournament(self, ctx, *, tournament_name: str):
+        """Покинуть турнир
+        Использование: !leave [название турнира]
+        """
+        if tournament_name not in self.active_tournaments:
+            await ctx.send("❌ Турнир не найден!")
+            return
+
+        tournament = self.active_tournaments[tournament_name]
+
+        if tournament["status"] != "registration":
+            await ctx.send("❌ Нельзя покинуть турнир после начала!")
+            return
+
+        participant_index = None
+        for i, participant in enumerate(tournament["participants"]):
+            if participant["id"] == ctx.author.id:
+                participant_index = i
+                break
+
+        if participant_index is None:
+            await ctx.send("❌ Вы не зарегистрированы в этом турнире!")
+            return
+
+        tournament["participants"].pop(participant_index)
+        await ctx.send(f"✅ Вы покинули турнир **{tournament_name}**")
+
+    @commands.command(name="bracket", aliases=["сетка"])
+    async def show_bracket(self, ctx, *, tournament_name: str):
+        """Показать турнирную сетку
+        Использование: !bracket [название турнира]
+        """
+        if tournament_name not in self.active_tournaments:
+            await ctx.send("❌ Турнир не найден!")
+            return
+
+        await self.send_bracket(ctx, tournament_name)
 
 
 async def setup(bot):
