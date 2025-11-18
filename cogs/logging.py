@@ -1,4 +1,5 @@
 import discord
+from discord import app_commands
 from discord.ext import commands
 import datetime
 import json
@@ -376,38 +377,47 @@ class Logging(commands.Cog):
             embed.add_field(name="Канал", value=after.channel.name if after.channel else "Неизвестно", inline=True)
             await self.send_log(member.guild, embed, "voice_changes")
 
-    # ===== КОМАНДЫ НАСТРОЙКИ =====
-    @commands.group()
-    @commands.has_permissions(administrator=True)
-    async def logs(self, ctx):
-        """Управление системой логов"""
-        if ctx.invoked_subcommand is None:
-            await self.show_logs_settings(ctx)
-
-    @logs.command()
-    async def channel(self, ctx, channel: discord.TextChannel):
+    # ===== СЛЭШ-КОМАНДЫ ДЛЯ НАСТРОЙКИ =====
+    @app_commands.command(name="logs_channel", description="Установить канал для логов")
+    @app_commands.describe(channel="Канал для отправки логов")
+    @app_commands.default_permissions(administrator=True)
+    async def logs_channel(self, interaction: discord.Interaction, channel: discord.TextChannel):
         """Установить канал для логов"""
-        self.set_guild_config(ctx.guild.id, "log_channel", channel.id)
+        self.set_guild_config(interaction.guild_id, "log_channel", channel.id)
 
         embed = discord.Embed(
             title="✅ Канал логов установлен",
             description=f"Логи будут отправляться в {channel.mention}",
             color=discord.Color.green()
         )
-        await ctx.send(embed=embed)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @logs.command()
-    async def enable(self, ctx, event_type: str):
+    @app_commands.command(name="logs_enable", description="Включить логирование определенного события")
+    @app_commands.describe(event_type="Тип события для включения")
+    @app_commands.choices(event_type=[
+        app_commands.Choice(name="Удаление сообщений", value="message_delete"),
+        app_commands.Choice(name="Редактирование сообщений", value="message_edit"),
+        app_commands.Choice(name="Вход участника", value="member_join"),
+        app_commands.Choice(name="Выход участника", value="member_leave"),
+        app_commands.Choice(name="Бан участника", value="member_ban"),
+        app_commands.Choice(name="Разбан участника", value="member_unban"),
+        app_commands.Choice(name="Обновление участника", value="member_update"),
+        app_commands.Choice(name="Изменение ролей", value="role_changes"),
+        app_commands.Choice(name="Изменение каналов", value="channel_changes"),
+        app_commands.Choice(name="Голосовые каналы", value="voice_changes"),
+    ])
+    @app_commands.default_permissions(administrator=True)
+    async def logs_enable(self, interaction: discord.Interaction, event_type: app_commands.Choice[str]):
         """Включить логирование определенного события"""
-        guild_config = self.get_guild_config(ctx.guild.id)
+        guild_config = self.get_guild_config(interaction.guild_id)
 
-        if event_type in guild_config["enabled_events"]:
-            guild_config["enabled_events"][event_type] = True
-            self.set_guild_config(ctx.guild.id, "enabled_events", guild_config["enabled_events"])
+        if event_type.value in guild_config["enabled_events"]:
+            guild_config["enabled_events"][event_type.value] = True
+            self.set_guild_config(interaction.guild_id, "enabled_events", guild_config["enabled_events"])
 
             embed = discord.Embed(
                 title="✅ Событие включено",
-                description=f"Логирование `{event_type}` включено",
+                description=f"Логирование `{event_type.name}` включено",
                 color=discord.Color.green()
             )
         else:
@@ -416,20 +426,34 @@ class Logging(commands.Cog):
                 color=discord.Color.red()
             )
 
-        await ctx.send(embed=embed)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @logs.command()
-    async def disable(self, ctx, event_type: str):
+    @app_commands.command(name="logs_disable", description="Выключить логирование определенного события")
+    @app_commands.describe(event_type="Тип события для выключения")
+    @app_commands.choices(event_type=[
+        app_commands.Choice(name="Удаление сообщений", value="message_delete"),
+        app_commands.Choice(name="Редактирование сообщений", value="message_edit"),
+        app_commands.Choice(name="Вход участника", value="member_join"),
+        app_commands.Choice(name="Выход участника", value="member_leave"),
+        app_commands.Choice(name="Бан участника", value="member_ban"),
+        app_commands.Choice(name="Разбан участника", value="member_unban"),
+        app_commands.Choice(name="Обновление участника", value="member_update"),
+        app_commands.Choice(name="Изменение ролей", value="role_changes"),
+        app_commands.Choice(name="Изменение каналов", value="channel_changes"),
+        app_commands.Choice(name="Голосовые каналы", value="voice_changes"),
+    ])
+    @app_commands.default_permissions(administrator=True)
+    async def logs_disable(self, interaction: discord.Interaction, event_type: app_commands.Choice[str]):
         """Выключить логирование определенного события"""
-        guild_config = self.get_guild_config(ctx.guild.id)
+        guild_config = self.get_guild_config(interaction.guild_id)
 
-        if event_type in guild_config["enabled_events"]:
-            guild_config["enabled_events"][event_type] = False
-            self.set_guild_config(ctx.guild.id, "enabled_events", guild_config["enabled_events"])
+        if event_type.value in guild_config["enabled_events"]:
+            guild_config["enabled_events"][event_type.value] = False
+            self.set_guild_config(interaction.guild_id, "enabled_events", guild_config["enabled_events"])
 
             embed = discord.Embed(
                 title="✅ Событие выключено",
-                description=f"Логирование `{event_type}` выключено",
+                description=f"Логирование `{event_type.name}` выключено",
                 color=discord.Color.orange()
             )
         else:
@@ -438,17 +462,14 @@ class Logging(commands.Cog):
                 color=discord.Color.red()
             )
 
-        await ctx.send(embed=embed)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @logs.command()
-    async def settings(self, ctx):
+    @app_commands.command(name="logs_settings", description="Показать текущие настройки логов")
+    @app_commands.default_permissions(administrator=True)
+    async def logs_settings(self, interaction: discord.Interaction):
         """Показать текущие настройки логов"""
-        await self.show_logs_settings(ctx)
-
-    async def show_logs_settings(self, ctx):
-        """Показать настройки логов"""
-        guild_config = self.get_guild_config(ctx.guild.id)
-        log_channel = ctx.guild.get_channel(guild_config.get("log_channel"))
+        guild_config = self.get_guild_config(interaction.guild_id)
+        log_channel = interaction.guild.get_channel(guild_config.get("log_channel"))
 
         embed = discord.Embed(
             title="⚙️ Настройки системы логов",
@@ -488,18 +509,20 @@ class Logging(commands.Cog):
         embed.add_field(
             name="📋 Команды",
             value=(
-                "`!logs channel #канал` - установить канал\n"
-                "`!logs enable событие` - включить событие\n"
-                "`!logs disable событие` - выключить событие\n"
-                "`!logs settings` - показать настройки"
+                "`/logs_channel` - установить канал\n"
+                "`/logs_enable` - включить событие\n"
+                "`/logs_disable` - выключить событие\n"
+                "`/logs_settings` - показать настройки\n"
+                "`/logs_test` - тест системы"
             ),
             inline=False
         )
 
-        await ctx.send(embed=embed)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @logs.command()
-    async def test(self, ctx):
+    @app_commands.command(name="logs_test", description="Тестовая отправка лога")
+    @app_commands.default_permissions(administrator=True)
+    async def logs_test(self, interaction: discord.Interaction):
         """Тестовая отправка лога"""
         embed = discord.Embed(
             title="🧪 Тестовое лог-сообщение",
@@ -507,15 +530,15 @@ class Logging(commands.Cog):
             color=discord.Color.gold(),
             timestamp=datetime.datetime.utcnow()
         )
-        embed.add_field(name="Канал", value=ctx.channel.mention, inline=True)
-        embed.add_field(name="Участник", value=ctx.author.mention, inline=True)
+        embed.add_field(name="Канал", value=interaction.channel.mention, inline=True)
+        embed.add_field(name="Участник", value=interaction.user.mention, inline=True)
 
-        log_channel = await self.get_log_channel(ctx.guild)
+        log_channel = await self.get_log_channel(interaction.guild)
         if log_channel:
             await log_channel.send(embed=embed)
-            await ctx.send("✅ Тестовое сообщение отправлено в канал логов!")
+            await interaction.response.send_message("✅ Тестовое сообщение отправлено в канал логов!", ephemeral=True)
         else:
-            await ctx.send("❌ Канал логов не найден! Установите его командой `!logs channel #канал`")
+            await interaction.response.send_message("❌ Канал логов не найден! Установите его командой `/logs_channel`", ephemeral=True)
 
 
 async def setup(bot):
