@@ -1,4 +1,5 @@
 import discord
+from discord import app_commands
 from discord.ext import commands
 import asyncio
 import random
@@ -14,23 +15,27 @@ class GiveawayCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    # команда: !giveaway 10m 3 Крутой приз
-    @commands.command(name="giveaway", aliases=["gstart"])
-    @commands.has_permissions(manage_guild=True)
-    async def start_giveaway(self, ctx: commands.Context, duration: str, winners: int, *, prize: str):
+    @app_commands.command(name="giveaway", description="Запустить розыгрыш")
+    @app_commands.describe(
+        duration="Длительность розыгрыша (например: 10s, 5m, 2h, 1d)",
+        winners="Количество победителей",
+        prize="Приз для розыгрыша"
+    )
+    @app_commands.default_permissions(manage_guild=True)
+    async def start_giveaway(self, interaction: discord.Interaction, duration: str, winners: int, prize: str):
         """
         Запуск розыгрыша.
-        Пример: !giveaway 10m 3 Нитро на месяц
+        Пример: /giveaway duration:10m winners:3 prize:Нитро на месяц
         duration формата: 10s / 5m / 2h / 1d
         winners — количество победителей (целое число >= 1)
         """
         if winners < 1:
-            await ctx.send("❌ Количество победителей должно быть **минимум 1**.")
+            await interaction.response.send_message("❌ Количество победителей должно быть **минимум 1**.", ephemeral=True)
             return
 
         seconds = self.parse_duration(duration)
         if seconds is None:
-            await ctx.send("❌ Неверный формат времени. Используй, например: `10s`, `5m`, `2h`, `1d`.")
+            await interaction.response.send_message("❌ Неверный формат времени. Используй, например: `10s`, `5m`, `2h`, `1d`.", ephemeral=True)
             return
 
         end_time = utcnow() + timedelta(seconds=seconds)
@@ -46,9 +51,10 @@ class GiveawayCog(commands.Cog):
             ),
             color=discord.Color.blurple()
         )
-        embed.set_footer(text=f"Создано: {ctx.author}", icon_url=ctx.author.display_avatar.url)
+        embed.set_footer(text=f"Создано: {interaction.user}", icon_url=interaction.user.display_avatar.url)
 
-        message = await ctx.send(embed=embed)
+        await interaction.response.send_message(embed=embed)
+        message = await interaction.original_response()
         await message.add_reaction(emoji)
 
         # ждём завершения розыгрыша
@@ -59,15 +65,15 @@ class GiveawayCog(commands.Cog):
 
         # пробуем снова получить сообщение, вдруг были новые реакции
         try:
-            message = await ctx.channel.fetch_message(message.id)
+            message = await interaction.channel.fetch_message(message.id)
         except discord.NotFound:
-            await ctx.send("❌ Сообщение розыгрыша было удалено, итоги провести нельзя.")
+            await interaction.followup.send("❌ Сообщение розыгрыша было удалено, итоги провести нельзя.", ephemeral=True)
             return
 
         # ищем нужную реакцию
         reaction = discord.utils.get(message.reactions, emoji=emoji)
         if reaction is None:
-            await ctx.send("❌ Никто не успел отреагировать на розыгрыш.")
+            await interaction.followup.send("❌ Никто не успел отреагировать на розыгрыш.")
             return
 
         # собираем участников
@@ -75,7 +81,7 @@ class GiveawayCog(commands.Cog):
         participants = [u for u in users if not u.bot]
 
         if not participants:
-            await ctx.send("❌ Участников нет, победителей выбрать невозможно.")
+            await interaction.followup.send("❌ Участников нет, победителей выбрать невозможно.")
             return
 
         winners_count = min(winners, len(participants))
@@ -94,7 +100,7 @@ class GiveawayCog(commands.Cog):
         )
         await message.edit(embed=finished_embed)
 
-        await ctx.send(f"🎉 Поздравляем, {winners_mentions}! Вы выиграли **{prize}** 🎁")
+        await interaction.followup.send(f"🎉 Поздравляем, {winners_mentions}! Вы выиграли **{prize}** 🎁")
 
     @staticmethod
     def parse_duration(duration: str) -> Optional[int]:
