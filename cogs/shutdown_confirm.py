@@ -6,6 +6,13 @@ import os
 import sys
 
 
+def is_owner():
+    """Проверка на владельца для слэш-команд"""
+    async def predicate(interaction: discord.Interaction) -> bool:
+        return await interaction.client.is_owner(interaction.user)
+    return app_commands.check(predicate)
+
+
 class ConfirmView(discord.ui.View):
     def __init__(self, action_type: str, timeout: float = 60.0):
         super().__init__(timeout=timeout)
@@ -46,7 +53,7 @@ class ShutdownConfirm(commands.Cog):
         self.bot = bot
 
     @app_commands.command(name="shutdown_confirm", description="Выключить бота с подтверждением (только для владельца)")
-    @app_commands.checks.is_owner()
+    @is_owner()
     async def shutdown_confirm(self, interaction: discord.Interaction):
         """Выключить бота с подтверждением (только для владельца)"""
         embed = discord.Embed(
@@ -89,7 +96,7 @@ class ShutdownConfirm(commands.Cog):
             await view.interaction.edit_original_response(embed=embed, view=None)
 
     @app_commands.command(name="restart_confirm", description="Перезагрузить бота с подтверждением (только для владельца)")
-    @app_commands.checks.is_owner()
+    @is_owner()
     async def restart_confirm(self, interaction: discord.Interaction):
         """Перезагрузить бота с подтверждением (только для владельца)"""
         embed = discord.Embed(
