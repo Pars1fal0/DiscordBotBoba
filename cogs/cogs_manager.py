@@ -2,12 +2,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 import os
-import importlib
-import sys
 import asyncio
-from typing import List
-
-from typing_inspection.typing_objects import is_any
 
 from cogs.shutdown import is_admin_or_owner
 
