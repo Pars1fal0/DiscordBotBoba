@@ -15,6 +15,15 @@ class GiveawayCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
+    async def cog_load(self):
+        """Вызывается при загрузке кога"""
+        print("GiveawayCog загружен, синхронизируем команды...")
+        try:
+            synced = await self.bot.tree.sync()
+            print(f"Синхронизировано {len(synced)} команд")
+        except Exception as e:
+            print(f"Ошибка синхронизации команд: {e}")
+
     @app_commands.command(name="giveaway", description="Запустить розыгрыш")
     @app_commands.describe(
         duration="Длительность розыгрыша (например: 10s, 5m, 2h, 1d)",
@@ -29,13 +38,16 @@ class GiveawayCog(commands.Cog):
         duration формата: 10s / 5m / 2h / 1d
         winners — количество победителей (целое число >= 1)
         """
+        await interaction.response.defer(ephemeral=True)
+
         if winners < 1:
-            await interaction.response.send_message("❌ Количество победителей должно быть **минимум 1**.", ephemeral=True)
+            await interaction.followup.send("❌ Количество победителей должно быть **минимум 1**.", ephemeral=True)
             return
 
         seconds = self.parse_duration(duration)
         if seconds is None:
-            await interaction.response.send_message("❌ Неверный формат времени. Используй, например: `10s`, `5m`, `2h`, `1d`.", ephemeral=True)
+            await interaction.followup.send("❌ Неверный формат времени. Используй, например: `10s`, `5m`, `2h`, `1d`.",
+                                            ephemeral=True)
             return
 
         end_time = utcnow() + timedelta(seconds=seconds)
@@ -53,27 +65,27 @@ class GiveawayCog(commands.Cog):
         )
         embed.set_footer(text=f"Создано: {interaction.user}", icon_url=interaction.user.display_avatar.url)
 
-        await interaction.response.send_message(embed=embed)
-        message = await interaction.original_response()
+        await interaction.followup.send("Розыгрыш создан!", ephemeral=True)
+        message = await interaction.channel.send(embed=embed)
         await message.add_reaction(emoji)
 
         # ждём завершения розыгрыша
         try:
             await asyncio.sleep(seconds)
         except asyncio.CancelledError:
-            return  # если вдруг что-то отменили – просто выходим
+            return
 
-        # пробуем снова получить сообщение, вдруг были новые реакции
+        # пробуем снова получить сообщение
         try:
             message = await interaction.channel.fetch_message(message.id)
         except discord.NotFound:
-            await interaction.followup.send("❌ Сообщение розыгрыша было удалено, итоги провести нельзя.", ephemeral=True)
+            await interaction.channel.send("❌ Сообщение розыгрыша было удалено, итоги провести нельзя.")
             return
 
         # ищем нужную реакцию
         reaction = discord.utils.get(message.reactions, emoji=emoji)
         if reaction is None:
-            await interaction.followup.send("❌ Никто не успел отреагировать на розыгрыш.")
+            await interaction.channel.send("❌ Никто не успел отреагировать на розыгрыш.")
             return
 
         # собираем участников
@@ -81,7 +93,7 @@ class GiveawayCog(commands.Cog):
         participants = [u for u in users if not u.bot]
 
         if not participants:
-            await interaction.followup.send("❌ Участников нет, победителей выбрать невозможно.")
+            await interaction.channel.send("❌ Участников нет, победителей выбрать невозможно.")
             return
 
         winners_count = min(winners, len(participants))
@@ -89,7 +101,7 @@ class GiveawayCog(commands.Cog):
 
         winners_mentions = ", ".join(user.mention for user in winners_list)
 
-        # обновим embed, чтобы было видно, что розыгрыш завершён
+        # обновляем embed
         finished_embed = message.embeds[0]
         finished_embed.color = discord.Color.green()
         finished_embed.title = "✅ Розыгрыш завершён!"
@@ -100,7 +112,7 @@ class GiveawayCog(commands.Cog):
         )
         await message.edit(embed=finished_embed)
 
-        await interaction.followup.send(f"🎉 Поздравляем, {winners_mentions}! Вы выиграли **{prize}** 🎁")
+        await interaction.channel.send(f"🎉 Поздравляем, {winners_mentions}! Вы выиграли **{prize}** 🎁")
 
     @staticmethod
     def parse_duration(duration: str) -> Optional[int]:
