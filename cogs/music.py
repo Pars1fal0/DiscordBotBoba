@@ -7,8 +7,9 @@ import asyncio
 from collections import deque
 import math
 import datetime
+import random
 
-# Настройки для yt-dlp
+# Улучшенные настройки для yt-dlp с обработкой ошибок
 ytdl_format_options = {
     'format': 'bestaudio/best',
     'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
@@ -20,28 +21,71 @@ ytdl_format_options = {
     'quiet': True,
     'no_warnings': True,
     'default_search': 'auto',
-    'source_address': '0.0.0.0'
+    'source_address': '0.0.0.0',
+    # Критически важные настройки для стабильности
+    'extractaudio': True,
+    'audioformat': 'mp3',
+    'audioquality': '0',
+    'retries': 10,
+    'fragment_retries': 10,
+    'skip_unavailable_fragments': True,
+    'no_part': True,
+    'hls_prefer_native': True,
+    'http_chunk_size': 10485760,
+    'continuedl': True,
+    'buffersize': 1024 * 1024,  # 1 MB buffer
 }
 
 ffmpeg_options = {
-    'options': '-vn -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5'
+    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -fflags +genpts+discardcorrupt -rtbufsize 64M -probesize 64M -analyzeduration 0',
+    'options': '-vn -bufsize 512k -af volume=0.15 -max_muxing_queue_size 1024'
 }
 
-ytdl = youtube_dl.YoutubeDL(ytdl_format_options)
+
+# Создаем ytdl с обработчиком ошибок
+class CustomYTDL(youtube_dl.YoutubeDL):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def extract_info(self, url, download=True, process=False, force_generic_extractor=False):
+        try:
+            return super().extract_info(url, download, process, force_generic_extractor)
+        except Exception as e:
+            print(f"YTDL Error: {e}")
+            # Пробуем альтернативный подход
+            return self._extract_with_fallback(url)
+
+    def _extract_with_fallback(self, url):
+        # Альтернативные настройки для проблемных видео
+        fallback_options = self.params.copy()
+        fallback_options.update({
+            'format': 'worstaudio/worst',
+            'retries': 20,
+            'fragment_retries': 20,
+            'skip_unavailable_fragments': True,
+            'ignoreerrors': True,
+        })
+
+        with youtube_dl.YoutubeDL(fallback_options) as ytdl_fallback:
+            return ytdl_fallback.extract_info(url, download=False)
+
+
+ytdl = CustomYTDL(ytdl_format_options)
 
 
 class Song:
     def __init__(self, data, requester):
-        self.title = data.get('title')
+        self.title = data.get('title', 'Неизвестный трек')
         self.url = data.get('url')
         self.webpage_url = data.get('webpage_url', data.get('url'))
         self.duration = data.get('duration')
         self.thumbnail = data.get('thumbnail')
-        self.uploader = data.get('uploader')
+        self.uploader = data.get('uploader', 'Неизвестный автор')
         self.requester = requester
         self.start_time = None
         self.paused_time = None
         self.is_paused = False
+        self.retry_count = 0
 
     def get_current_position(self):
         if self.is_paused and self.paused_time:
@@ -105,9 +149,40 @@ class Song:
     def resume(self):
         if self.is_paused:
             self.is_paused = False
-            # Обновляем start_time чтобы продолжить с того же места
             self.start_time = datetime.datetime.now() - datetime.timedelta(seconds=self.paused_time)
             self.paused_time = None
+
+
+class YTDLSource(discord.PCMVolumeTransformer):
+    def __init__(self, source, *, data, volume=0.5):
+        super().__init__(source, volume)
+        self.data = data
+        self.title = data.get('title')
+        self.url = data.get('url')
+
+    @classmethod
+    async def from_url(cls, url, *, loop=None, stream=False, retry_count=0):
+        loop = loop or asyncio.get_event_loop()
+
+        # Максимум 3 попытки
+        if retry_count >= 3:
+            raise Exception("Не удалось загрузить трек после нескольких попыток")
+
+        try:
+            data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=not stream))
+
+            if 'entries' in data:
+                data = data['entries'][0]
+
+            filename = data['url'] if stream else ytdl.prepare_filename(data)
+            return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
+
+        except Exception as e:
+            print(f"Ошибка при загрузке {url}: {e}")
+            # Ретри с экспоненциальной задержкой
+            delay = min(2 ** retry_count, 10)  # Макс 10 секунд
+            await asyncio.sleep(delay)
+            return await cls.from_url(url, loop=loop, stream=stream, retry_count=retry_count + 1)
 
 
 class MusicCog(commands.Cog):
@@ -123,6 +198,67 @@ class MusicCog(commands.Cog):
         if guild_id not in self.queues:
             self.queues[guild_id] = deque()
         return self.queues[guild_id]
+
+    async def safe_play(self, interaction, song, retry_count=0):
+        """Безопасное воспроизведение с повторными попытками"""
+        guild_id = interaction.guild.id
+        voice_client = interaction.guild.voice_client
+
+        if retry_count >= 2:  # Максимум 2 ретрая
+            await interaction.channel.send(f"❌ Не удалось воспроизвести **{song.title}**. Пропускаем трек.")
+            await self.play_next(interaction)
+            return
+
+        try:
+            player = await YTDLSource.from_url(song.webpage_url, loop=self.bot.loop, stream=True)
+
+            def after_play(error):
+                if error:
+                    print(f"Playback error: {error}")
+                    # Пытаемся воспроизвести следующий трек
+                    asyncio.run_coroutine_threadsafe(
+                        self.handle_playback_error(interaction, song, retry_count, error),
+                        self.bot.loop
+                    )
+                else:
+                    # Нормальное завершение - играем следующий
+                    asyncio.run_coroutine_threadsafe(self.play_next(interaction), self.bot.loop)
+
+            voice_client.play(player, after=after_play)
+
+            # Сохраняем текущий трек и время начала
+            self.current_songs[guild_id] = song
+            song.start_time = datetime.datetime.now()
+            self.start_times[guild_id] = song.start_time
+
+            # Создаем сообщение с текущим треком
+            embed = song.get_embed(now_playing=True)
+            message = await interaction.channel.send(embed=embed)
+            self.nowplaying_messages[guild_id] = message
+
+        except Exception as e:
+            print(f"Safe play error: {e}")
+            await self.handle_playback_error(interaction, song, retry_count, e)
+
+    async def handle_playback_error(self, interaction, song, retry_count, error):
+        """Обработка ошибок воспроизведения"""
+        guild_id = interaction.guild.id
+
+        # Увеличиваем счетчик попыток для этого трека
+        song.retry_count += 1
+
+        if song.retry_count <= 2:
+            # Пробуем еще раз с задержкой
+            delay = min(2 ** song.retry_count, 5)
+            await interaction.channel.send(
+                f"🔄 Проблема с воспроизведением **{song.title}**. Повторная попытка через {delay} сек...")
+            await asyncio.sleep(delay)
+            await self.safe_play(interaction, song, song.retry_count)
+        else:
+            # Слишком много ошибок - пропускаем трек
+            await interaction.channel.send(
+                f"❌ Не удалось воспроизвести **{song.title}** после нескольких попыток. Пропускаем.")
+            await self.play_next(interaction)
 
     async def play_next(self, interaction):
         guild_id = interaction.guild.id
@@ -140,29 +276,11 @@ class MusicCog(commands.Cog):
             song = queue.popleft()
             voice_client = interaction.guild.voice_client
 
-            try:
-                # Сохраняем текущий трек и время начала
-                self.current_songs[guild_id] = song
-                song.start_time = datetime.datetime.now()
-                self.start_times[guild_id] = song.start_time
+            if not voice_client or not voice_client.is_connected():
+                await interaction.channel.send("❌ Бот отключен от голосового канала")
+                return
 
-                player = await YTDLSource.from_url(song.webpage_url, loop=self.bot.loop, stream=True)
-                voice_client.play(player, after=lambda e: asyncio.run_coroutine_threadsafe(self.play_next(interaction),
-                                                                                           self.bot.loop))
-
-                # Создаем сообщение с текущим треком
-                embed = song.get_embed(now_playing=True)
-                message = await interaction.channel.send(embed=embed)
-                self.nowplaying_messages[guild_id] = message
-
-            except Exception as e:
-                await interaction.channel.send(f"❌ Ошибка воспроизведения: {str(e)}")
-                # Удаляем текущий трек при ошибке
-                if guild_id in self.current_songs:
-                    del self.current_songs[guild_id]
-                if guild_id in self.start_times:
-                    del self.start_times[guild_id]
-                await self.play_next(interaction)
+            await self.safe_play(interaction, song)
         else:
             # Если очередь пуста, отключаемся через 1 минуту
             await asyncio.sleep(60)
@@ -244,6 +362,7 @@ class MusicCog(commands.Cog):
         except Exception as e:
             await interaction.followup.send(f"❌ Ошибка: {str(e)}")
 
+    # Остальные команды остаются такими же (skip, queue, nowplaying, clear, leave, pause, resume, stop)
     @app_commands.command(name="skip", description="Пропускает текущий трек")
     async def skip(self, interaction: discord.Interaction):
         """Пропускает текущий трек"""
@@ -386,25 +505,6 @@ class MusicCog(commands.Cog):
 
     def cog_unload(self):
         self.update_progress.cancel()
-
-
-class YTDLSource(discord.PCMVolumeTransformer):
-    def __init__(self, source, *, data, volume=0.5):
-        super().__init__(source, volume)
-        self.data = data
-        self.title = data.get('title')
-        self.url = data.get('url')
-
-    @classmethod
-    async def from_url(cls, url, *, loop=None, stream=False):
-        loop = loop or asyncio.get_event_loop()
-        data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=not stream))
-
-        if 'entries' in data:
-            data = data['entries'][0]
-
-        filename = data['url'] if stream else ytdl.prepare_filename(data)
-        return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
 
 
 async def setup(bot):
