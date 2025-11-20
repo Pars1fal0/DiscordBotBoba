@@ -1,7 +1,7 @@
 # music_cog.py
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 import yt_dlp as youtube_dl
 import asyncio
 from collections import deque
@@ -40,6 +40,15 @@ class Song:
         self.uploader = data.get('uploader')
         self.requester = requester
         self.start_time = None
+        self.paused_time = None
+        self.is_paused = False
+
+    def get_current_position(self):
+        if self.is_paused and self.paused_time:
+            return self.paused_time
+        elif self.start_time and not self.is_paused:
+            return (datetime.datetime.now() - self.start_time).total_seconds()
+        return 0
 
     def get_embed(self, now_playing=False):
         embed = discord.Embed(
@@ -55,19 +64,15 @@ class Song:
 
         if self.duration:
             duration_str = f"{self.duration // 60}:{self.duration % 60:02d}"
+            current_pos = self.get_current_position()
 
-            # Если трек уже играет, показываем прогресс
-            if now_playing and self.start_time:
-                elapsed = (datetime.datetime.now() - self.start_time).total_seconds()
-                if elapsed < self.duration:
-                    progress_bar = self.create_progress_bar(elapsed, self.duration)
-                    embed.add_field(
-                        name="Длительность",
-                        value=f"{progress_bar}\n{self.format_time(elapsed)} / {duration_str}",
-                        inline=False
-                    )
-                else:
-                    embed.add_field(name="Длительность", value=duration_str, inline=True)
+            if now_playing and current_pos < self.duration:
+                progress_bar = self.create_progress_bar(current_pos, self.duration)
+                embed.add_field(
+                    name="Длительность",
+                    value=f"{progress_bar}\n{self.format_time(current_pos)} / {duration_str}",
+                    inline=False
+                )
             else:
                 embed.add_field(name="Длительность", value=duration_str, inline=True)
 
@@ -81,7 +86,7 @@ class Song:
 
         return embed
 
-    def create_progress_bar(self, elapsed, total, length=20):
+    def create_progress_bar(self, elapsed, total, length=15):
         progress = min(elapsed / total, 1.0)
         filled = int(length * progress)
         bar = "▬" * filled + "🔘" + "▬" * (length - filled - 1)
@@ -92,6 +97,18 @@ class Song:
         seconds = int(seconds % 60)
         return f"{minutes}:{seconds:02d}"
 
+    def pause(self):
+        if not self.is_paused:
+            self.is_paused = True
+            self.paused_time = self.get_current_position()
+
+    def resume(self):
+        if self.is_paused:
+            self.is_paused = False
+            # Обновляем start_time чтобы продолжить с того же места
+            self.start_time = datetime.datetime.now() - datetime.timedelta(seconds=self.paused_time)
+            self.paused_time = None
+
 
 class MusicCog(commands.Cog):
     def __init__(self, bot):
@@ -99,6 +116,8 @@ class MusicCog(commands.Cog):
         self.queues = {}
         self.current_songs = {}
         self.start_times = {}
+        self.nowplaying_messages = {}
+        self.update_progress.start()
 
     def get_queue(self, guild_id):
         if guild_id not in self.queues:
@@ -108,6 +127,14 @@ class MusicCog(commands.Cog):
     async def play_next(self, interaction):
         guild_id = interaction.guild.id
         queue = self.get_queue(guild_id)
+
+        # Останавливаем обновление предыдущего сообщения
+        if guild_id in self.nowplaying_messages:
+            try:
+                await self.nowplaying_messages[guild_id].delete()
+            except:
+                pass
+            del self.nowplaying_messages[guild_id]
 
         if queue:
             song = queue.popleft()
@@ -123,8 +150,11 @@ class MusicCog(commands.Cog):
                 voice_client.play(player, after=lambda e: asyncio.run_coroutine_threadsafe(self.play_next(interaction),
                                                                                            self.bot.loop))
 
+                # Создаем сообщение с текущим треком
                 embed = song.get_embed(now_playing=True)
-                await interaction.channel.send(embed=embed)
+                message = await interaction.channel.send(embed=embed)
+                self.nowplaying_messages[guild_id] = message
+
             except Exception as e:
                 await interaction.channel.send(f"❌ Ошибка воспроизведения: {str(e)}")
                 # Удаляем текущий трек при ошибке
@@ -138,13 +168,42 @@ class MusicCog(commands.Cog):
             await asyncio.sleep(60)
             voice_client = interaction.guild.voice_client
             if voice_client and not voice_client.is_playing():
-                # Очищаем текущий трек
+                # Очищаем текущий трек и сообщение
                 if guild_id in self.current_songs:
                     del self.current_songs[guild_id]
                 if guild_id in self.start_times:
                     del self.start_times[guild_id]
+                if guild_id in self.nowplaying_messages:
+                    try:
+                        await self.nowplaying_messages[guild_id].delete()
+                    except:
+                        pass
+                    del self.nowplaying_messages[guild_id]
                 await voice_client.disconnect()
                 await interaction.channel.send("👋 Очередь пуста, отключаюсь")
+
+    @tasks.loop(seconds=5)
+    async def update_progress(self):
+        """Обновляет прогресс-бар каждые 5 секунд"""
+        for guild_id, message in list(self.nowplaying_messages.items()):
+            try:
+                if guild_id in self.current_songs:
+                    song = self.current_songs[guild_id]
+                    voice_client = self.bot.get_guild(guild_id).voice_client
+
+                    if voice_client and voice_client.is_playing():
+                        embed = song.get_embed(now_playing=True)
+                        await message.edit(embed=embed)
+                    elif not voice_client or not voice_client.is_connected():
+                        # Если бот отключился, удаляем сообщение
+                        await message.delete()
+                        del self.nowplaying_messages[guild_id]
+            except (discord.NotFound, discord.HTTPException):
+                # Сообщение было удалено
+                if guild_id in self.nowplaying_messages:
+                    del self.nowplaying_messages[guild_id]
+            except Exception as e:
+                print(f"Ошибка при обновлении прогресса: {e}")
 
     @app_commands.command(name="play", description="Добавляет трек в очередь")
     @app_commands.describe(url="Ссылка на YouTube видео или название для поиска")
@@ -265,6 +324,12 @@ class MusicCog(commands.Cog):
                 del self.current_songs[guild_id]
             if guild_id in self.start_times:
                 del self.start_times[guild_id]
+            if guild_id in self.nowplaying_messages:
+                try:
+                    await self.nowplaying_messages[guild_id].delete()
+                except:
+                    pass
+                del self.nowplaying_messages[guild_id]
 
             await voice_client.disconnect()
             await interaction.response.send_message("👋 Отключился от канала")
@@ -274,9 +339,12 @@ class MusicCog(commands.Cog):
     @app_commands.command(name="pause", description="Ставит воспроизведение на паузу")
     async def pause(self, interaction: discord.Interaction):
         """Пауза"""
+        guild_id = interaction.guild.id
         voice_client = interaction.guild.voice_client
         if voice_client and voice_client.is_playing():
             voice_client.pause()
+            if guild_id in self.current_songs:
+                self.current_songs[guild_id].pause()
             await interaction.response.send_message("⏸️ Пауза")
         else:
             await interaction.response.send_message("❌ Нечего ставить на паузу")
@@ -284,9 +352,12 @@ class MusicCog(commands.Cog):
     @app_commands.command(name="resume", description="Продолжает воспроизведение")
     async def resume(self, interaction: discord.Interaction):
         """Продолжить воспроизведение"""
+        guild_id = interaction.guild.id
         voice_client = interaction.guild.voice_client
         if voice_client and voice_client.is_paused():
             voice_client.resume()
+            if guild_id in self.current_songs:
+                self.current_songs[guild_id].resume()
             await interaction.response.send_message("▶️ Продолжаем")
         else:
             await interaction.response.send_message("❌ Нечего продолжать")
@@ -305,7 +376,16 @@ class MusicCog(commands.Cog):
                 del self.current_songs[guild_id]
             if guild_id in self.start_times:
                 del self.start_times[guild_id]
+            if guild_id in self.nowplaying_messages:
+                try:
+                    await self.nowplaying_messages[guild_id].delete()
+                except:
+                    pass
+                del self.nowplaying_messages[guild_id]
             await interaction.response.send_message("⏹️ Воспроизведение остановлено и очередь очищена")
+
+    def cog_unload(self):
+        self.update_progress.cancel()
 
 
 class YTDLSource(discord.PCMVolumeTransformer):
