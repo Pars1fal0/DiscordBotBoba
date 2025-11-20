@@ -81,29 +81,6 @@ class ShutdownConfirm(commands.Cog):
         self.bot = bot
         self.owner_id = get_owner_id()
 
-    @app_commands.command(name="whoami", description="Показать информацию о правах пользователя")
-    async def whoami(self, interaction: discord.Interaction):
-        """Показать информацию о правах пользователя"""
-        owner_id = get_owner_id()
-        is_bot_owner = owner_id and interaction.user.id == owner_id
-        is_admin = interaction.guild and interaction.user.guild_permissions.administrator
-
-        embed = discord.Embed(
-            title="👤 Информация о правах",
-            color=discord.Color.blue(),
-            timestamp=discord.utils.utcnow()
-        )
-
-        embed.add_field(name="Пользователь", value=f"{interaction.user.mention} (ID: {interaction.user.id})",
-                        inline=False)
-        embed.add_field(name="Создатель бота", value="✅ Да" if is_bot_owner else "❌ Нет", inline=True)
-        embed.add_field(name="Администратор сервера", value="✅ Да" if is_admin else "❌ Нет", inline=True)
-
-        if owner_id:
-            embed.add_field(name="Ожидаемый ID создателя", value=owner_id, inline=False)
-
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
     @app_commands.command(name="shutdown_confirm", description="Выключить бота с подтверждением (только для создателя)")
     @is_bot_owner()
     async def shutdown_confirm(self, interaction: discord.Interaction):
