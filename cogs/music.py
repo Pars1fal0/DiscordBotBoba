@@ -83,16 +83,32 @@ class Song:
         self.uploader = data.get('uploader', 'Неизвестный автор')
         self.requester = requester
         self.start_time = None
-        self.paused_time = None
+        self.paused_time = 0  # Накопленное время при паузах
         self.is_paused = False
+        self.total_elapsed = 0  # Общее проигранное время
         self.retry_count = 0
 
     def get_current_position(self):
-        if self.is_paused and self.paused_time:
-            return self.paused_time
+        if self.is_paused:
+            return self.total_elapsed
         elif self.start_time and not self.is_paused:
-            return (datetime.datetime.now() - self.start_time).total_seconds()
-        return 0
+            elapsed = (datetime.datetime.now() - self.start_time).total_seconds()
+            return self.total_elapsed + elapsed
+        return self.total_elapsed
+
+    def pause(self):
+        if not self.is_paused and self.start_time:
+            self.is_paused = True
+            # Сохраняем накопленное время
+            elapsed = (datetime.datetime.now() - self.start_time).total_seconds()
+            self.total_elapsed += elapsed
+            self.paused_time = self.total_elapsed
+
+    def resume(self):
+        if self.is_paused:
+            self.is_paused = False
+            # Устанавливаем новое время начала, учитывая уже проигранное время
+            self.start_time = datetime.datetime.now()
 
     def get_embed(self, now_playing=False):
         embed = discord.Embed(
@@ -112,8 +128,9 @@ class Song:
 
             if now_playing and current_pos < self.duration:
                 progress_bar = self.create_progress_bar(current_pos, self.duration)
+                status = "⏸️ На паузе" if self.is_paused else "▶️ Играет"
                 embed.add_field(
-                    name="Длительность",
+                    name=f"Длительность • {status}",
                     value=f"{progress_bar}\n{self.format_time(current_pos)} / {duration_str}",
                     inline=False
                 )
@@ -140,17 +157,6 @@ class Song:
         minutes = int(seconds // 60)
         seconds = int(seconds % 60)
         return f"{minutes}:{seconds:02d}"
-
-    def pause(self):
-        if not self.is_paused:
-            self.is_paused = True
-            self.paused_time = self.get_current_position()
-
-    def resume(self):
-        if self.is_paused:
-            self.is_paused = False
-            self.start_time = datetime.datetime.now() - datetime.timedelta(seconds=self.paused_time)
-            self.paused_time = None
 
 
 class YTDLSource(discord.PCMVolumeTransformer):
@@ -229,6 +235,7 @@ class MusicCog(commands.Cog):
             # Сохраняем текущий трек и время начала
             self.current_songs[guild_id] = song
             song.start_time = datetime.datetime.now()
+            song.total_elapsed = 0  # Сбрасываем при начале нового трека
             self.start_times[guild_id] = song.start_time
 
             # Создаем сообщение с текущим треком
@@ -309,7 +316,7 @@ class MusicCog(commands.Cog):
                     song = self.current_songs[guild_id]
                     voice_client = self.bot.get_guild(guild_id).voice_client
 
-                    if voice_client and voice_client.is_playing():
+                    if voice_client and (voice_client.is_playing() or song.is_paused):
                         embed = song.get_embed(now_playing=True)
                         await message.edit(embed=embed)
                     elif not voice_client or not voice_client.is_connected():
@@ -362,7 +369,6 @@ class MusicCog(commands.Cog):
         except Exception as e:
             await interaction.followup.send(f"❌ Ошибка: {str(e)}")
 
-    # Остальные команды остаются такими же (skip, queue, nowplaying, clear, leave, pause, resume, stop)
     @app_commands.command(name="skip", description="Пропускает текущий трек")
     async def skip(self, interaction: discord.Interaction):
         """Пропускает текущий трек"""
@@ -384,8 +390,9 @@ class MusicCog(commands.Cog):
         # Текущий играющий трек
         current_song = self.current_songs.get(guild_id)
         if current_song:
+            status = "⏸️ На паузе" if current_song.is_paused else "▶️ Играет"
             embed.add_field(
-                name="Сейчас играет",
+                name=f"Сейчас играет • {status}",
                 value=f"[{current_song.title}]({current_song.webpage_url}) | {current_song.requester.mention}",
                 inline=False
             )
@@ -412,7 +419,7 @@ class MusicCog(commands.Cog):
         guild_id = interaction.guild.id
         voice_client = interaction.guild.voice_client
 
-        if not voice_client or not voice_client.is_playing():
+        if not voice_client or (not voice_client.is_playing() and not voice_client.is_paused()):
             await interaction.response.send_message("❌ Сейчас ничего не играет")
             return
 
