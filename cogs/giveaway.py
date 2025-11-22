@@ -15,15 +15,6 @@ class GiveawayCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    async def cog_load(self):
-        """Вызывается при загрузке кога"""
-        print("GiveawayCog загружен, синхронизируем команды...")
-        try:
-            synced = await self.bot.tree.sync()
-            print(f"Синхронизировано {len(synced)} команд")
-        except Exception as e:
-            print(f"Ошибка синхронизации команд: {e}")
-
     @app_commands.command(name="giveaway", description="Запустить розыгрыш")
     @app_commands.describe(
         duration="Длительность розыгрыша (например: 10s, 5m, 2h, 1d)",
