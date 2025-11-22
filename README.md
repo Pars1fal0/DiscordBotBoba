@@ -27,7 +27,7 @@
 1. **Клонируйте репозиторий:**
    ```bash
    git clone https://github.com/Pars1fal0/Discord-bot-Arvent.git
-   cd DiscordBotBoba
+   cd Discord-bot-Arvent
    ```
 
 2. **Создайте виртуальное окружение:**
